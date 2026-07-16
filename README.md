@@ -15,7 +15,6 @@ the one app-specific part — **build + boot the PR's app** — via the `run:` i
   with:
     target: dvwa
     app-url: http://app
-    github-token: ${{ github.token }}
     run: |
       docker build -t ctf-app:pr .
       docker network create --internal "$NETWORK"
@@ -42,11 +41,11 @@ the one app-specific part — **build + boot the PR's app** — via the `run:` i
 | `target` | ✅ | | `juice-shop` \| `dvwa` \| `webgoat` \| `securityshepherd` \| `vampi` \| `vulnerableapp` |
 | `app-url` | ✅ | | Base URL the scorer hits, reachable on `ctfnet` (e.g. `http://app`, `http://app:8080/WebGoat`) |
 | `run` | | | App-specific setup (bash) run **before** scoring: build the PR image, create `ctfnet`, boot the app + deps, wait for health. Runs inside the action container, drives the host daemon via the mounted socket. `$SCORER_IMAGE` and `$NETWORK` are exported. Trusted consumer YAML — docker build/run PR code only, never execute it directly |
-| `github-token` | | | Pass `${{ github.token }}` for the PR result comment. Container actions don't receive `GITHUB_TOKEN` automatically; empty = skip the comment |
 
 Everything else is hardcoded (one CTF = one leaderboard + one scorer): network `ctfnet`,
 image `ghcr.io/OWASP-CTF/score:latest`, API `https://api.ctf.owasp.org`, audience `ctf-score`,
-leaderboard `https://ctf.owasp.org/leaderboard`.
+leaderboard `https://ctf.owasp.org/leaderboard`. The PR-comment token comes from the caller's
+`${{ github.token }}` automatically (needs `pull-requests: write`).
 
 ## Outputs
 

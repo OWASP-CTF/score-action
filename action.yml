@@ -51,10 +51,6 @@ inputs:
       run` the PR's code into containers, but must NEVER execute PR-controlled code directly.
     required: false
     default: ""
-  github-token:
-    description: "Pass ${{ github.token }} for the PR result comment (container actions don't receive GITHUB_TOKEN automatically). Empty = skip the comment."
-    required: false
-    default: ""
 
 outputs:
   open:
@@ -70,7 +66,9 @@ runs:
     TARGET: ${{ inputs.target }}
     APP_URL: ${{ inputs.app-url }}
     RUN: ${{ inputs.run }}
-    GH_TOKEN: ${{ inputs.github-token }}
+    # Container actions don't receive GITHUB_TOKEN automatically; pull it from the caller's
+    # github context (uses the consumer job's permissions — needs pull-requests: write).
+    GH_TOKEN: ${{ github.token }}
   args:
     - "-c"
     - |

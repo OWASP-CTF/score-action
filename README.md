@@ -1,12 +1,13 @@
 # score-action
 
-Composite GitHub Action that scores an **OWASP CTF** patch PR against the private scorer
+Docker **container** GitHub Action that scores an **OWASP CTF** patch PR against the scorer
 image and records the result on the leaderboard.
 
 It replaces the ~300 lines of near-identical YAML that every CTF fork used to copy-paste.
-A consumer workflow now only does the part that's actually app-specific — **build + boot
-the PR's app** — and hands the running app to this action for everything shared: pull the
-scorer, run the rubric, record the score, and comment on the PR.
+The action **is** the scorer image (`docker://ghcr.io/OWASP-CTF/score:latest`, org-internal),
+so there's no separate login/pull — its entrypoint runs *inside* the image, which already
+ships the rubric, the `score` binary, node, curl, and the docker CLI. A consumer only supplies
+the one app-specific part — **build + boot the PR's app** — via the `run:` input.
 
 ```yaml
 - name: Score + record
@@ -14,17 +15,25 @@ scorer, run the rubric, record the score, and comment on the PR.
   with:
     target: dvwa
     app-url: http://app
+    github-token: ${{ github.token }}
+    run: |
+      docker build -t ctf-app:pr .
+      docker network create --internal "$NETWORK"
+      docker run -d --name app --network "$NETWORK" ctf-app:pr
+      # ...wait for health...
 ```
 
-## What it does
+## What it does (one container, in order)
 
-1. Logs in to GHCR and pulls the private scorer image.
-2. Runs the scorer against the already-running app (`--target <target> --url <app-url>`),
-   producing the `ctf-score.json` sidecar. The rubric is baked into the image — no answer
-   key is ever checked out.
-3. Mints a GitHub **OIDC id-token** and `POST`s the result to the scoring API. No stored
-   datastore secret: the server authorizes the run by the token's `repository_owner`.
-4. Upserts a single result comment on the PR (recorded / no-points-yet / did-not-complete).
+1. Runs your `run:` setup on the **host** docker daemon (the socket is bind-mounted into
+   container actions) — build + boot the PR app on `network`.
+2. Attaches **this** container to `network` so the in-process scorer can reach the app
+   (which sits on an `--internal`, internet-less network).
+3. Scores the running app with the embedded rubric (`--target <target> --url <app-url>`),
+   producing the `ctf-score.json` sidecar. The rubric is baked in — no answer key is checked out.
+4. Mints the job's GitHub **OIDC id-token** and `POST`s the result to the scoring API. No
+   stored secret: the server authorizes the run by the token's `repository_owner`.
+5. Upserts a single result comment on the PR (recorded / no-points-yet / did-not-complete).
 
 ## Inputs
 
@@ -32,12 +41,14 @@ scorer, run the rubric, record the score, and comment on the PR.
 |-------|----------|---------|-------------|
 | `target` | ✅ | | `juice-shop` \| `dvwa` \| `webgoat` \| `securityshepherd` \| `vampi` \| `vulnerableapp` |
 | `app-url` | ✅ | | Base URL the scorer hits, reachable on `network` (e.g. `http://app`, `http://app:8080/WebGoat`) |
-| `network` | | `ctfnet` | Docker network the app runs on; the scorer joins it |
-| `score-image` | | `ghcr.io/owasp-ctf/score:latest` | Private scorer image |
+| `run` | | | App-specific setup (bash) run **before** scoring: build the PR image, create `network`, boot the app + deps, wait for health. Runs inside the action container, drives the host daemon via the mounted socket. `$SCORER_IMAGE` and `$NETWORK` are exported. Trusted consumer YAML — docker build/run PR code only, never execute it directly |
+| `github-token` | | | Pass `${{ github.token }}` for the PR result comment. Container actions don't receive `GITHUB_TOKEN` automatically; empty = skip the comment |
+| `network` | | `ctfnet` | Docker network the app runs on; the action container attaches to it to reach the app |
+| `score-image` | | `ghcr.io/owasp-ctf/score:latest` | Image your `run:` references as `$SCORER_IMAGE` (readiness probes etc). The action image itself is fixed in metadata |
 | `score-api` | | `https://api.ctf.owasp.org` | Scoring API base (`POST <score-api>/score`) |
 | `audience` | | `ctf-score` | OIDC id-token audience the API requires |
-| `extra-env` | | | Newline-separated `KEY=VALUE` pairs passed to the scorer as `-e` (e.g. `WEBWOLF_URL=…`) |
-| `source-mount` | | | Host path mounted **read-only** at `/src` and exposed as `CTF_UPSTREAM_DIR` (source-analysis challenges) |
+| `extra-env` | | | Newline-separated `KEY=VALUE` pairs exported to the in-process scorer (e.g. `WEBWOLF_URL=…`) |
+| `source-mount` | | | Path **inside the action container** exposed as `CTF_UPSTREAM_DIR` for source-analysis. The consumer checkout is mounted at `/github/workspace` |
 | `post-comment` | | `true` | Upsert the PR result comment |
 | `leaderboard-url` | | `https://ctf.owasp.org/leaderboard` | URL shown in the comment |
 
@@ -53,29 +64,25 @@ scorer, run the rubric, record the score, and comment on the PR.
 ```yaml
 permissions:
   contents: read       # checkout the PR head to build it
-  packages: read       # pull the private scorer image
+  packages: read       # runner pulls the org-internal scorer/action image
   id-token: write      # mint the OIDC token POST /score authorizes
   pull-requests: write # the result comment
 ```
 
 ## Security model
 
-The action runs as **steps in one job**, so that job holds `id-token: write` and
-`pull-requests: write` next to the untrusted `docker build`. This is safe **only because
-the PR's code never runs on the runner host** — it is exclusively `docker build`/`docker
-run` into containers on an `--internal` (internet-less) network, so it cannot read the
-runner's OIDC request token or `GITHUB_TOKEN`.
+The action runs as **one step (one container)**, so its job holds `id-token: write` and
+`pull-requests: write` next to the untrusted `docker build`. This is safe **only because the
+PR's code never runs on the runner host** — it is exclusively `docker build`/`docker run`
+into containers on an `--internal` (internet-less) network, so it cannot read the OIDC request
+token or `GITHUB_TOKEN`. The action container attaches to that internal network only to make
+client HTTP requests to the app — it runs no inbound service and does not route the app's
+traffic out, so the app stays internet-less.
 
-> **Do not** add a step that executes PR-controlled code directly on the runner (for
-> example `npm run` / `mvn` from the PR checkout, outside a container) in this job.
+> **Do not** add a consumer step (or `run:` line) that executes PR-controlled code directly
+> (for example `npm run` / `mvn` from the PR checkout, outside a container).
 
 The leaderboard write carries **no secret**: the id-token is minted per-run (audience
-`ctf-score`, via [`cnuss/actions-identity`](https://github.com/cnuss/actions-identity)) and
-sent as a bearer to `POST /score`, which the server authorizes by `repository_owner`.
-Author / PR / SHA travel in the request body from the trusted `github.event` context, not
-from PR code.
-
-## Examples
-
-Full consumer workflows live in [`examples/`](examples/): `juice-shop.yml`, `dvwa.yml`,
-`webgoat.yml`. Copy the matching one into a fork as `.github/workflows/ctf-score.yml`.
+`ctf-score`) and sent as a bearer to `POST /score`, which the server authorizes by
+`repository_owner`. Author / PR / SHA travel in the request body from the trusted
+`github.event` context, not from PR code.

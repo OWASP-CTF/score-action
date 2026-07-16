@@ -20,7 +20,7 @@ inputs:
 
 runs:
   using: "docker"
-  image: "docker://ghcr.io/owasp-ctf/score:latest"
+  image: "Dockerfile" # build locally FROM the public scorer image (see ./Dockerfile)
   pre-entrypoint: "pre-score.sh" # DEVNOTE: sets up the network and run the PR app container
   entrypoint: "score.sh" # DEVNOTE: scores the app and post the result to the leaderboard
   env:

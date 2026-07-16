@@ -32,7 +32,7 @@ runs:
     - "-c"
     - "pre-score.sh && score.sh"
   env:
-    SCORE_API: "https://api.ctf.owasp.org"
+    SCORE_API: "https://dyekymos1dkde.cloudfront.net" # TEMP: api.ctf.owasp.org CNAME not wired yet; revert once DNS lands
     LEADERBOARD_URL: "https://ctf.owasp.org/leaderboard"
     GH_TOKEN: ${{ inputs.github-token }} # from the input default; runs.env can't read `github` directly
     ID_TOKEN: ${{ inputs.id-token }}

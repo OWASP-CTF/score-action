@@ -14,6 +14,9 @@ inputs:
   id-token:
     description: "GitHub OIDC id-token for posting the result to the leaderboard."
     required: true
+  github-token:
+    description: "GitHub token for the PR result comment."
+    default: ${{ github.token }}
 
 runs:
   using: "docker"
@@ -23,7 +26,7 @@ runs:
   env:
     SCORE_API: "https://api.ctf.owasp.org"
     LEADERBOARD_URL: "https://ctf.owasp.org/leaderboard"
-    GH_TOKEN: ${{ github.token }} # container actions don't get GITHUB_TOKEN for free; for the PR comment
+    GH_TOKEN: ${{ inputs.github-token }} # from the input default; runs.env can't read `github` directly
     ID_TOKEN: ${{ inputs.id-token }}
     TARGET: ${{ inputs.target }}
     APP_URL: ${{ inputs.app-url }}

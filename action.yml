@@ -26,6 +26,9 @@ inputs:
   score-image:
     description: "Scorer image to pull and run."
     default: "ghcr.io/owasp-ctf/score:latest"
+  app-image:
+    description: "Prebuilt app image to score (e.g. stock upstream for dogfooding). When set, the scorer pulls it instead of building the PR's app from the checked-out workspace."
+    default: ""
 
 runs:
   using: "composite"
@@ -78,14 +81,18 @@ runs:
         SCORE_IMAGE: ${{ inputs.score-image }}
         TARGET: ${{ inputs.target }}
         APP_URL: ${{ inputs.app-url }}
+        APP_IMAGE: ${{ inputs.app-image }}
         ID_TOKEN: ${{ steps.identity.outputs.id-token }}
         SCORE_API: "https://dyekymos1dkde.cloudfront.net" # TEMP: revert to https://api.ctf.owasp.org once DNS lands
       run: |
         set -euo pipefail
         # Run the image's baked entrypoint.sh: build/boot the PR app on ctfnet, score, POST.
+        # APP_IMAGE (optional) makes the scorer pull a prebuilt app instead of building the PR's.
+        # SCORER_IMAGE = the image we run, so the bring-up's sibling probe uses the same build.
         docker run --rm \
           --entrypoint /usr/local/bin/entrypoint.sh \
-          -e TARGET -e APP_URL -e ID_TOKEN -e SCORE_API -e NETWORK=ctfnet \
+          -e TARGET -e APP_URL -e APP_IMAGE -e ID_TOKEN -e SCORE_API -e NETWORK=ctfnet \
+          -e SCORER_IMAGE="$SCORE_IMAGE" \
           -e GITHUB_WORKSPACE=/github/workspace \
           -e GITHUB_EVENT_PATH=/github/event.json \
           -v /var/run/docker.sock:/var/run/docker.sock \

@@ -4,32 +4,70 @@ branding:
   icon: "award"
   color: "purple"
 
+# ─────────────────────────────────────────────────────────────────────────────
+# COMPOSITE action. Runs on the runner host, so it can `docker login` and explicitly pull +
+# run the scorer image — which means it works with an **internal/private** image (the scorer
+# bakes the rubric; keeping it internal avoids leaking the answer key). A docker *container*
+# action can't: GitHub pulls an action image anonymously, so an internal image 401s.
+#
+# The consumer checks out the PR head and mints the OIDC id-token; this action then runs the
+# image's baked `entrypoint.sh` via `docker run` with the host docker socket mounted, so
+# entrypoint.sh builds + boots the PR app (sibling containers on ctfnet), scores it, and POSTs
+# the result. The scorer container joins ctfnet to reach the app.
+#
+# SECURITY — the PR's code is only ever docker build/run into containers on an --internal
+# network; it never executes on the runner host, so it can't read the id-token or GITHUB_TOKEN.
+# ─────────────────────────────────────────────────────────────────────────────
+
 inputs:
   target:
     description: "Scorer target: juice-shop | dvwa | webgoat | securityshepherd | vampi | vulnerableapp."
     required: true
   app-url:
-    description: "Base URL score.sh hits, reachable on the ctfnet network (e.g. http://app, http://app:8080/WebGoat)."
+    description: "Base URL the scorer hits, reachable on the ctfnet network (e.g. http://app, http://app:8080/WebGoat)."
     required: true
   id-token:
-    description: "GitHub OIDC id-token for posting the result to the leaderboard."
+    description: "GitHub OIDC id-token for posting the result to the leaderboard (the consumer mints it)."
     required: true
   github-token:
-    description: "GitHub token for the PR result comment."
+    description: "GitHub token used to log in to GHCR (pull the internal scorer image)."
     default: ${{ github.token }}
+  score-image:
+    description: "Scorer image to pull and run."
+    default: "ghcr.io/owasp-ctf/score:latest"
 
 runs:
-  using: "docker"
-  image: "Dockerfile" # build locally FROM the public scorer image (see ./Dockerfile)
-  # entrypoint.sh (baked in the image) does the whole job in one container — sandbox network,
-  # build + boot the PR app, join the network, score, POST. It runs at the `uses:` position
-  # (after the consumer's checkout + id-token mint), NOT as a pre-entrypoint: GitHub runs action
-  # pre-steps at job start, before checkout, so the workspace would be empty (proven on DVWA#29).
-  entrypoint: "entrypoint.sh"
-  env:
-    SCORE_API: "https://dyekymos1dkde.cloudfront.net" # TEMP: api.ctf.owasp.org CNAME not wired yet; revert once DNS lands
-    LEADERBOARD_URL: "https://ctf.owasp.org/leaderboard"
-    GH_TOKEN: ${{ inputs.github-token }} # from the input default; runs.env can't read `github` directly
-    ID_TOKEN: ${{ inputs.id-token }}
-    TARGET: ${{ inputs.target }}
-    APP_URL: ${{ inputs.app-url }}
+  using: "composite"
+  steps:
+    - name: Log in to GHCR (pull the internal scorer image)
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ inputs.github-token }}
+
+    - name: Score + record
+      shell: bash
+      env:
+        SCORE_IMAGE: ${{ inputs.score-image }}
+        TARGET: ${{ inputs.target }}
+        APP_URL: ${{ inputs.app-url }}
+        ID_TOKEN: ${{ inputs.id-token }}
+        # Org-managed endpoint (temp CloudFront domain until api.ctf.owasp.org DNS lands).
+        SCORE_API: ${{ vars.SCORE_API_URL || 'https://dyekymos1dkde.cloudfront.net' }}
+      run: |
+        set -euo pipefail
+        # Run the image's baked entrypoint.sh: sandbox network -> build/boot the PR app -> score
+        # -> POST. The host docker socket lets it build/run the PR app as sibling containers; the
+        # workspace mount gives it the checked-out PR (docker build context); the event mount gives
+        # --post its provenance (author/pr/sha). --entrypoint is an absolute path (image ENTRYPOINT
+        # is the score binary).
+        docker run --rm \
+          --entrypoint /usr/local/bin/entrypoint.sh \
+          -e TARGET -e APP_URL -e ID_TOKEN -e SCORE_API -e NETWORK=ctfnet \
+          -e GITHUB_WORKSPACE=/github/workspace \
+          -e GITHUB_EVENT_PATH=/github/event.json \
+          -v /var/run/docker.sock:/var/run/docker.sock \
+          -v "${GITHUB_WORKSPACE}:/github/workspace" \
+          -v "${GITHUB_EVENT_PATH}:/github/event.json:ro" \
+          "$SCORE_IMAGE"

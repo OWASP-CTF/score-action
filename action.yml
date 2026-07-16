@@ -99,3 +99,47 @@ runs:
           -v "${GITHUB_WORKSPACE}:/github/workspace" \
           -v "${GITHUB_EVENT_PATH}:/github/event.json:ro" \
           "$SCORE_IMAGE"
+
+    # The scorer writes the redacted score table to $GITHUB_WORKSPACE/ctf-score.md (bind-mounted
+    # out of the container). Upsert it as ONE comment per target — keyed by a hidden marker so
+    # every app's score coexists on a PR — matching the standalone score-<app> workflows. Runs
+    # even if scoring errored so a failure still reports; supersedes the "scoring in progress" ack.
+    - name: Comment the score on the PR
+      if: ${{ always() && github.event.pull_request }}
+      uses: actions/github-script@v7
+      env:
+        CTF_TARGET: ${{ inputs.target }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          const target = process.env.CTF_TARGET;
+          const names = {
+            'juice-shop': 'Juice Shop', dvwa: 'DVWA', vampi: 'VAmPI',
+            vulnerableapp: 'VulnerableApp', webgoat: 'WebGoat', securityshepherd: 'Security Shepherd',
+          };
+          const app = names[target] || target;
+          const marker = `<!-- ctf-score:${target} -->`;
+          const { owner, repo } = context.repo;
+          const issue_number = context.payload.pull_request.number;
+          const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+          const path = `${process.env.GITHUB_WORKSPACE}/ctf-score.md`;
+          let table = fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : '';
+          if (!table.trim()) {
+            table = `## 🏆 ${app} — CTF Patch Score\n\nScorer produced no output — see the [job log](${run}).\n`;
+          }
+          // Fold the app name into the scorer's generic title line.
+          table = table.replace(/^## 🏆 CTF Patch Score$/m, `## 🏆 ${app} — CTF Patch Score`);
+          const body = `${marker}\n${table}`;
+          const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+          const existing = comments.find((c) => c.body && c.body.includes(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+          } else {
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+          }
+          // The result supersedes the "scoring in progress" ack — remove it.
+          const ack = comments.find((c) => c.body && c.body.includes('<!-- ctf-score-ack -->'));
+          if (ack) {
+            await github.rest.issues.deleteComment({ owner, repo, comment_id: ack.id }).catch(() => {});
+          }

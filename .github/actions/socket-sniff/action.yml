@@ -1,0 +1,18 @@
+name: "docker socket sniff (container action)"
+description: "Reports whether /var/run/docker.sock is present INSIDE a runs.using=docker container action."
+runs:
+  using: "docker"
+  image: "docker://alpine:3"
+  entrypoint: "/bin/sh"
+  args:
+    - "-c"
+    - |
+      echo "=== inside a runs.using=docker container action ==="
+      echo "whoami: $(id)"
+      if [ -S /var/run/docker.sock ]; then
+        echo "RESULT: docker.sock IS present in the container action"
+        ls -la /var/run/docker.sock
+      else
+        echo "RESULT: docker.sock is NOT present in the container action"
+      fi
+      echo "docker CLI: $(command -v docker || echo 'not installed in this image')"

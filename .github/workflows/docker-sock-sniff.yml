@@ -1,0 +1,45 @@
+# Sniff test: does GitHub expose /var/run/docker.sock in the contexts this action uses?
+#
+# Settles "Wrinkle 1": a composite action's shell steps run on the RUNNER (which has the
+# docker daemon), while a runs.using=docker container action runs INSIDE a container that
+# GitHub does NOT give the socket by default. This workflow proves both empirically.
+#
+# Run from the Actions tab (workflow_dispatch) or on push to this branch.
+name: docker-sock-sniff
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/docker-sock-sniff.yml"
+      - ".github/actions/socket-sniff/**"
+
+permissions: {}
+
+jobs:
+  runner-context:
+    # How the composite action actually runs: shell steps on the runner host.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Socket presence on the runner (composite/shell context)
+        run: |
+          echo "whoami: $(id)"
+          if [ -S /var/run/docker.sock ]; then
+            echo "RESULT: docker.sock IS present on the runner"
+            ls -la /var/run/docker.sock
+          else
+            echo "RESULT: docker.sock is NOT present on the runner"
+          fi
+          echo "docker CLI: $(command -v docker || echo 'missing')"
+          echo "--- can we actually drive the daemon? ---"
+          docker version --format '{{.Server.Version}}' 2>&1 || echo "docker version FAILED"
+
+  container-action-context:
+    # The shape we ruled out for the score binary: a runs.using=docker container action.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Socket presence inside a docker container action
+        uses: ./.github/actions/socket-sniff

@@ -1,0 +1,83 @@
+# Consumer workflow for an OWASP-CTF/DVWA CTF fork.
+# Copy to the fork as: .github/workflows/ctf-score.yml
+#
+# DVWA needs a MariaDB sidecar and a one-off setup.php DB init before scoring. Everything
+# after boot (score, record, comment) is handled by OWASP-CTF/score-action.
+name: ctf-score
+
+on:
+  pull_request_target:
+    branches: [master]
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ctf-score-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - name: Check out the PR head (untrusted — only docker-built, never run on the host)
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Build + boot DVWA and MariaDB on an internal network
+        run: |
+          docker build -t ctf-app:pr .
+          docker network create --internal ctfnet
+          docker run -d --name db --network ctfnet \
+            -e MYSQL_ROOT_PASSWORD=dvwa -e MYSQL_DATABASE=dvwa \
+            -e MYSQL_USER=dvwa -e MYSQL_PASSWORD='p@ssw0rd' \
+            docker.io/library/mariadb:10
+          docker run -d --name app --network ctfnet \
+            -e DB_SERVER=db -e DB_DATABASE=dvwa -e DB_USER=dvwa -e DB_PASSWORD='p@ssw0rd' \
+            -e DEFAULT_SECURITY_LEVEL=low ctf-app:pr
+
+      - name: Wait for DVWA and initialise its database
+        run: |
+          docker run --rm --entrypoint node --network ctfnet ghcr.io/owasp-ctf/score:latest -e '
+            const B = "http://app";
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+            const get = (u, o = {}) => fetch(u, { signal: AbortSignal.timeout(8000), ...o });
+            const jar = new Map();
+            const add = (r) => { for (const h of r.headers.getSetCookie()) { const p = h.split(";")[0], i = p.indexOf("="); if (i > 0) jar.set(p.slice(0, i).trim(), p.slice(i + 1).trim()); } };
+            const ck = () => [...jar].map(([k, v]) => k + "=" + v).join("; ");
+            const tok = (h) => { const i = h.indexOf("user_token"); const m = i < 0 ? null : h.slice(i).match(/[a-f0-9]{32}/i); return m ? m[0] : ""; };
+            (async () => {
+              let up = false;
+              for (let i = 0; i < 45; i++) { try { if ((await get(B + "/login.php")).ok) { up = true; break; } } catch {} await sleep(2000); }
+              if (!up) { console.error("DVWA never served a healthy /login.php"); process.exit(2); }
+              for (let i = 0; i < 30; i++) {
+                jar.clear();
+                const g = await get(B + "/setup.php"); add(g);
+                const t = tok(await g.text());
+                await get(B + "/setup.php", { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: ck() }, body: "create_db=Create+%2F+Reset+Database&user_token=" + t }).then(add).catch(() => {});
+                const lg = await get(B + "/login.php"); add(lg);
+                const lt = tok(await lg.text());
+                const lp = await get(B + "/login.php", { method: "POST", redirect: "manual", headers: { "content-type": "application/x-www-form-urlencoded", cookie: ck() }, body: "username=admin&password=password&Login=Login&user_token=" + lt });
+                if (lp.status === 302 && (lp.headers.get("location") || "").includes("index")) { console.log("DVWA ready after " + i + " attempt(s)"); process.exit(0); }
+                await sleep(2000);
+              }
+              console.error("DVWA DB never initialised"); process.exit(3);
+            })();
+          '
+
+      - name: Score + record
+        uses: OWASP-CTF/score-action@main
+        with:
+          target: dvwa
+          app-url: http://app
+
+      - name: Stop containers
+        if: always()
+        run: docker rm -f app db 2>/dev/null || true

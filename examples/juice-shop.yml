@@ -1,0 +1,72 @@
+# Consumer workflow for an OWASP-CTF/juice-shop CTF fork.
+# Copy to the fork as: .github/workflows/ctf-score.yml
+#
+# Everything shared (pull the scorer, score, record on the leaderboard, comment) is in
+# OWASP-CTF/score-action. This file only builds + boots THIS app, then calls the action.
+#
+# SECURITY — pull_request_target runs with the base repo's token while the PR is untrusted.
+# The PR is only ever `docker build`/`docker run` into containers on an --internal network;
+# it never runs on the runner, so it can't read the OIDC request token or GITHUB_TOKEN. Do
+# NOT add a step that runs PR-controlled code directly on the runner in this job.
+name: ctf-score
+
+on:
+  pull_request_target:
+    branches: [dc34-ctf]
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ctf-score-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  score:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read # checkout
+      packages: read # pull the private scorer image
+      id-token: write # mint the OIDC token POST /score authorizes
+      pull-requests: write # result comment
+    steps:
+      - name: Check out the PR head (untrusted — only docker-built, never run on the host)
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Build + boot the app on an internal network
+        run: |
+          docker build -t ctf-app:pr .
+          docker network create --internal ctfnet
+          # NODE_CONFIG forces Juice Shop's Safety Mode OFF so every vuln is live and a PR
+          # can't flip it back on to farm points.
+          docker run -d --name app --network ctfnet \
+            -e NODE_CONFIG='{"challenges":{"safetyMode":"disabled"}}' \
+            ctf-app:pr
+
+      - name: Wait for the app to become healthy
+        run: |
+          for i in $(seq 1 60); do
+            if [ "$(docker inspect -f '{{.State.Running}}' app 2>/dev/null)" != "true" ]; then
+              echo "::error::app container exited during boot"; docker logs app 2>&1 | tail -120; exit 1
+            fi
+            if docker run --rm --entrypoint node --network ctfnet ghcr.io/owasp-ctf/score:latest \
+                 -e "fetch('http://app:3000/rest/admin/application-version',{signal:AbortSignal.timeout(5000)}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"; then
+              echo "App up after ~$((i*3))s"; break
+            fi
+            sleep 3
+          done
+
+      - name: Score + record
+        uses: OWASP-CTF/score-action@main
+        with:
+          target: juice-shop
+          app-url: http://app:3000
+          # The scorer's static-analysis challenges read the PR source (never execute it).
+          source-mount: ${{ github.workspace }}
+
+      - name: Stop the app
+        if: always()
+        run: docker rm -f app 2>/dev/null || true

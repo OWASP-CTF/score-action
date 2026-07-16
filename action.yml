@@ -1,0 +1,29 @@
+name: "OWASP CTF Score Action"
+description: "Score an OWASP CTF patch PR against the scorer image and record the result on the leaderboard."
+branding:
+  icon: "award"
+  color: "purple"
+
+inputs:
+  target:
+    description: "Scorer target: juice-shop | dvwa | webgoat | securityshepherd | vampi | vulnerableapp."
+    required: true
+  app-url:
+    description: "Base URL score.sh hits, reachable on the ctfnet network (e.g. http://app, http://app:8080/WebGoat)."
+    required: true
+  id-token:
+    description: "GitHub OIDC id-token for posting the result to the leaderboard."
+    required: true
+
+runs:
+  using: "docker"
+  image: "docker://ghcr.io/owasp-ctf/score:latest"
+  pre-entrypoint: "pre-score.sh" # DEVNOTE: sets up the network and run the PR app container
+  entrypoint: "score.sh" # DEVNOTE: scores the app and post the result to the leaderboard
+  env:
+    SCORE_API: "https://api.ctf.owasp.org"
+    LEADERBOARD_URL: "https://ctf.owasp.org/leaderboard"
+    GH_TOKEN: ${{ github.token }} # container actions don't get GITHUB_TOKEN for free; for the PR comment
+    ID_TOKEN: ${{ inputs.id-token }}
+    TARGET: ${{ inputs.target }}
+    APP_URL: ${{ inputs.app-url }}

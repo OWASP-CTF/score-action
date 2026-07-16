@@ -14,9 +14,12 @@ inputs:
   app-url:
     description: "Base URL the scorer hits, reachable on the ctfnet network (e.g. http://app, http://app:8080/WebGoat)."
     required: true
-  id-token:
-    description: "GitHub OIDC id-token for posting the result to the leaderboard (the consumer mints it)."
-    required: true
+  ref:
+    description: "PR head to check out and build (untrusted — only docker-built, never run on the host)."
+    default: ${{ github.event.pull_request.head.sha }}
+  id-token-audience:
+    description: "Audience for the minted OIDC id-token the leaderboard authorizes."
+    default: "ctf-score"
   github-token:
     description: "GitHub token used to log in to GHCR (pull the internal scorer image)."
     default: ${{ github.token }}
@@ -27,6 +30,17 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Check out the PR head (untrusted — only docker-built, never run on the host)
+      uses: actions/checkout@v5
+      with:
+        ref: ${{ inputs.ref }}
+
+    - name: Mint the OIDC id-token for the leaderboard
+      id: identity
+      uses: cnuss/actions-identity@b9bc5d6472e00dfca0490bdf539eb4d4b729807d # v1.1.0
+      with:
+        id-token-audience: ${{ inputs.id-token-audience }}
+
     - name: Log in to GHCR (pull the internal scorer image)
       uses: docker/login-action@v3
       with:
@@ -40,7 +54,7 @@ runs:
         SCORE_IMAGE: ${{ inputs.score-image }}
         TARGET: ${{ inputs.target }}
         APP_URL: ${{ inputs.app-url }}
-        ID_TOKEN: ${{ inputs.id-token }}
+        ID_TOKEN: ${{ steps.identity.outputs.id-token }}
         SCORE_API: "https://dyekymos1dkde.cloudfront.net" # TEMP: revert to https://api.ctf.owasp.org once DNS lands
       run: |
         set -euo pipefail

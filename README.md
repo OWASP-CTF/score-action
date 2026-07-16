@@ -4,19 +4,14 @@
 records the result on the leaderboard. Replaces the ~300-line `ctf-score.yml` each CTF fork
 copy-pastes.
 
+The action checks out the PR head and mints the OIDC id-token itself — the consumer only sets
+`permissions` and calls it:
+
 ```yaml
-- uses: actions/checkout@v5 # PR head, so the action can docker-build it
-  with:
-    ref: ${{ github.event.pull_request.head.sha }}
-- id: identity # mint the OIDC id-token
-  uses: cnuss/actions-identity@v1.1.0
-  with:
-    id-token-audience: ctf-score
 - uses: OWASP-CTF/score-action@main
   with:
     target: dvwa
     app-url: http://app
-    id-token: ${{ steps.identity.outputs.id-token }}
 ```
 
 First consumer: [`OWASP-CTF/DVWA`](https://github.com/OWASP-CTF/DVWA).
@@ -27,7 +22,8 @@ First consumer: [`OWASP-CTF/DVWA`](https://github.com/OWASP-CTF/DVWA).
 |-------|----------|---------|-------------|
 | `target` | ✅ | | `juice-shop` \| `dvwa` \| `webgoat` \| `securityshepherd` \| `vampi` \| `vulnerableapp` |
 | `app-url` | ✅ | | Base URL the scorer hits on `ctfnet` (e.g. `http://app`, `http://app:8080/WebGoat`) |
-| `id-token` | ✅ | | OIDC id-token the leaderboard authorizes — the consumer mints it (audience `ctf-score`) |
+| `ref` | | `${{ github.event.pull_request.head.sha }}` | PR head to check out + build |
+| `id-token-audience` | | `ctf-score` | Audience for the minted OIDC id-token |
 | `github-token` | | `${{ github.token }}` | Token to log in to GHCR (pull the internal scorer image) |
 | `score-image` | | `ghcr.io/owasp-ctf/score:latest` | Scorer image to pull + run |
 

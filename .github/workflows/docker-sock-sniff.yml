@@ -45,6 +45,13 @@ jobs:
   container-action:
     # The real shape: score image as a runs.using=docker action. Also tests private-image
     # pull for a step-level docker:// action after a GHCR login.
+    #
+    # EXPECTED TO FAIL: GitHub pulls an action image with its own mechanism that does NOT
+    # honor a prior `docker/login-action`, so the PRIVATE score image pull returns
+    # `unauthorized`. This is the finding — the score image can't be a container action
+    # while it's private — so the job is non-blocking, not a broken test. The composite
+    # action sidesteps it by logging in and pulling explicitly (see the `simulate` job).
+    continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
       packages: read

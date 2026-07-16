@@ -35,9 +35,6 @@ inputs:
   score-image:
     description: "Scorer image to pull and run."
     default: "ghcr.io/owasp-ctf/score:latest"
-  score-api:
-    description: "Scoring API base (POST <score-api>/score). Pass ${{ vars.SCORE_API_URL }} — the `vars` context isn't available inside action metadata, so the workflow must thread it in."
-    default: "https://dyekymos1dkde.cloudfront.net" # temp until api.ctf.owasp.org DNS lands
 
 runs:
   using: "composite"
@@ -56,7 +53,7 @@ runs:
         TARGET: ${{ inputs.target }}
         APP_URL: ${{ inputs.app-url }}
         ID_TOKEN: ${{ inputs.id-token }}
-        SCORE_API: ${{ inputs.score-api }}
+        SCORE_API: "https://dyekymos1dkde.cloudfront.net" # TEMP: revert to https://api.ctf.owasp.org once DNS lands
       run: |
         set -euo pipefail
         # Run the image's baked entrypoint.sh: sandbox network -> build/boot the PR app -> score

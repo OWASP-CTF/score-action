@@ -21,16 +21,11 @@ inputs:
 runs:
   using: "docker"
   image: "Dockerfile" # build locally FROM the public scorer image (see ./Dockerfile)
-  # Both scripts run in the ONE main-entrypoint container. `pre-entrypoint` is unusable: GitHub
-  # runs action pre-steps at job start, BEFORE the consumer's checkout + id-token mint, so the
-  # workspace is empty (proven: `lstat /github/workspace/Dockerfile: no such file`, DVWA#29).
-  # The main entrypoint runs at the `uses:` position, after those steps.
-  #   pre-score.sh — sets up ctfnet + builds/boots the PR app (daemon)
-  #   score.sh     — joins ctfnet, scores, POSTs the result
-  entrypoint: "/bin/bash"
-  args:
-    - "-c"
-    - "pre-score.sh && score.sh"
+  # entrypoint.sh (baked in the image) does the whole job in one container — sandbox network,
+  # build + boot the PR app, join the network, score, POST. It runs at the `uses:` position
+  # (after the consumer's checkout + id-token mint), NOT as a pre-entrypoint: GitHub runs action
+  # pre-steps at job start, before checkout, so the workspace would be empty (proven on DVWA#29).
+  entrypoint: "entrypoint.sh"
   env:
     SCORE_API: "https://dyekymos1dkde.cloudfront.net" # TEMP: api.ctf.owasp.org CNAME not wired yet; revert once DNS lands
     LEADERBOARD_URL: "https://ctf.owasp.org/leaderboard"

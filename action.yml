@@ -4,20 +4,8 @@ branding:
   icon: "award"
   color: "purple"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# COMPOSITE action. Runs on the runner host, so it can `docker login` and explicitly pull +
-# run the scorer image — which means it works with an **internal/private** image (the scorer
-# bakes the rubric; keeping it internal avoids leaking the answer key). A docker *container*
-# action can't: GitHub pulls an action image anonymously, so an internal image 401s.
-#
-# The consumer checks out the PR head and mints the OIDC id-token; this action then runs the
-# image's baked `entrypoint.sh` via `docker run` with the host docker socket mounted, so
-# entrypoint.sh builds + boots the PR app (sibling containers on ctfnet), scores it, and POSTs
-# the result. The scorer container joins ctfnet to reach the app.
-#
-# SECURITY — the PR's code is only ever docker build/run into containers on an --internal
-# network; it never executes on the runner host, so it can't read the id-token or GITHUB_TOKEN.
-# ─────────────────────────────────────────────────────────────────────────────
+# Composite (not a container action) so it can docker login and pull the internal scorer image.
+# The PR's code only runs inside containers on the --internal ctfnet, never on the host.
 
 inputs:
   target:
@@ -56,11 +44,7 @@ runs:
         SCORE_API: "https://dyekymos1dkde.cloudfront.net" # TEMP: revert to https://api.ctf.owasp.org once DNS lands
       run: |
         set -euo pipefail
-        # Run the image's baked entrypoint.sh: sandbox network -> build/boot the PR app -> score
-        # -> POST. The host docker socket lets it build/run the PR app as sibling containers; the
-        # workspace mount gives it the checked-out PR (docker build context); the event mount gives
-        # --post its provenance (author/pr/sha). --entrypoint is an absolute path (image ENTRYPOINT
-        # is the score binary).
+        # Run the image's baked entrypoint.sh: build/boot the PR app on ctfnet, score, POST.
         docker run --rm \
           --entrypoint /usr/local/bin/entrypoint.sh \
           -e TARGET -e APP_URL -e ID_TOKEN -e SCORE_API -e NETWORK=ctfnet \

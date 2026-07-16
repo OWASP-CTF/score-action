@@ -21,8 +21,15 @@ inputs:
 runs:
   using: "docker"
   image: "docker://ghcr.io/owasp-ctf/score:latest"
-  pre-entrypoint: "pre-score.sh" # DEVNOTE: sets up the network and run the PR app container
-  entrypoint: "score.sh" # DEVNOTE: scores the app and post the result to the leaderboard
+  # Both scripts run in the ONE main-entrypoint container. `pre-entrypoint` can't be used: GitHub
+  # runs action pre-steps at job start, BEFORE the consumer's checkout + id-token mint, so the
+  # workspace would be empty. The main entrypoint runs at the `uses:` position (after those).
+  #   pre-score.sh — sets up ctfnet + builds/boots the PR app (daemon)
+  #   score.sh     — joins ctfnet, scores, POSTs the result
+  entrypoint: "/bin/bash"
+  args:
+    - "-c"
+    - "pre-score.sh && score.sh"
   env:
     SCORE_API: "https://api.ctf.owasp.org"
     LEADERBOARD_URL: "https://ctf.owasp.org/leaderboard"

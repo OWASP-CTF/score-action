@@ -1,10 +1,13 @@
-# Sniff test: does GitHub expose /var/run/docker.sock in the contexts this action uses?
+# Sniff test: can the score image drive the host docker daemon via the mounted socket?
 #
-# Settles "Wrinkle 1": a composite action's shell steps run on the RUNNER (which has the
-# docker daemon), while a runs.using=docker container action runs INSIDE a container that
-# GitHub does NOT give the socket by default. This workflow proves both empirically.
+# First run proved GitHub bind-mounts /var/run/docker.sock into a runs.using=docker
+# container action. Now that the score image ships the docker CLI, this checks the payoff:
+# the score image, as a container action, actually building/running via the host daemon.
 #
-# Run from the Actions tab (workflow_dispatch) or on push to this branch.
+# Two angles:
+#   - simulate: pull score:latest and run it with the socket mounted (proves CLI + socket).
+#   - real:     use the score image AS a runs.using=docker container action (also tests
+#               whether GitHub can pull the PRIVATE action image with a prior GHCR login).
 name: docker-sock-sniff
 
 on:
@@ -17,29 +20,41 @@ on:
 permissions: {}
 
 jobs:
-  runner-context:
-    # How the composite action actually runs: shell steps on the runner host.
+  simulate:
     runs-on: ubuntu-latest
+    permissions:
+      packages: read # pull the private score image
     steps:
-      - uses: actions/checkout@v5
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
-      - name: Socket presence on the runner (composite/shell context)
+      - name: Run score image with the socket mounted
         run: |
-          echo "whoami: $(id)"
-          if [ -S /var/run/docker.sock ]; then
-            echo "RESULT: docker.sock IS present on the runner"
-            ls -la /var/run/docker.sock
-          else
-            echo "RESULT: docker.sock is NOT present on the runner"
-          fi
-          echo "docker CLI: $(command -v docker || echo 'missing')"
-          echo "--- can we actually drive the daemon? ---"
-          docker version --format '{{.Server.Version}}' 2>&1 || echo "docker version FAILED"
+          docker pull ghcr.io/owasp-ctf/score:latest
+          echo "--- baked-in docker CLI version ---"
+          docker run --rm --entrypoint docker ghcr.io/owasp-ctf/score:latest --version
+          echo "--- can it reach the host daemon through the mounted socket? ---"
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            --entrypoint docker ghcr.io/owasp-ctf/score:latest \
+            version --format 'server={{.Server.Version}}'
 
-  container-action-context:
-    # The shape we ruled out for the score binary: a runs.using=docker container action.
+  container-action:
+    # The real shape: score image as a runs.using=docker action. Also tests private-image
+    # pull for a step-level docker:// action after a GHCR login.
     runs-on: ubuntu-latest
+    permissions:
+      packages: read
     steps:
       - uses: actions/checkout@v5
-      - name: Socket presence inside a docker container action
+      - name: Log in to GHCR (for the private action image pull)
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Score image as a container action
         uses: ./.github/actions/socket-sniff

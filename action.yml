@@ -40,62 +40,19 @@ inputs:
     description: "Scorer target: juice-shop | dvwa | webgoat | securityshepherd | vampi | vulnerableapp."
     required: true
   app-url:
-    description: "Base URL the scorer hits, reachable on `network` (e.g. http://app, http://app:8080/WebGoat)."
+    description: "Base URL the scorer hits, reachable on the ctfnet network (e.g. http://app, http://app:8080/WebGoat)."
     required: true
-
   run:
     description: >
       App-specific setup script (bash) run BEFORE scoring: build the PR's app image, create the
-      `network`, boot the app + any deps on it, and wait for health. Runs inside this container
-      but drives the HOST docker daemon via the bind-mounted socket; `$SCORER_IMAGE` and
-      `$NETWORK` are exported for it. Trusted, consumer-authored YAML — it may `docker
-      build`/`docker run` the PR's code into containers, but must NEVER execute PR-controlled
-      code directly (see Security model).
+      `ctfnet` network, boot the app + any deps on it, and wait for health. Runs inside this
+      container but drives the HOST docker daemon via the bind-mounted socket; `$SCORER_IMAGE`
+      and `$NETWORK` are exported. Trusted, consumer-authored YAML — it may `docker build`/`docker
+      run` the PR's code into containers, but must NEVER execute PR-controlled code directly.
     required: false
     default: ""
-
-  network:
-    description: "Docker network the app runs on; this container attaches to it to reach the app."
-    required: false
-    default: "ctfnet"
-  score-image:
-    description: >
-      Scorer image tag your `run:` setup references as `$SCORER_IMAGE` (e.g. for readiness
-      probes via `docker run`). The action itself always runs as ghcr.io/OWASP-CTF/score:latest
-      (a docker action's image is fixed in metadata and cannot be overridden per-call).
-    required: false
-    default: "ghcr.io/owasp-ctf/score:latest"
-  score-api:
-    description: "Base URL of the scoring API (POST <score-api>/score)."
-    required: false
-    default: "https://api.ctf.owasp.org"
-  audience:
-    description: "OIDC id-token audience the scoring API requires."
-    required: false
-    default: "ctf-score"
-
-  extra-env:
-    description: "Newline-separated KEY=VALUE pairs exported to the in-process scorer (e.g. WEBWOLF_URL=..., WEBGOAT_DESER_PAYLOAD=...)."
-    required: false
-    default: ""
-  source-mount:
-    description: >
-      Path (inside this container) exposed to the scorer as CTF_UPSTREAM_DIR for source-analysis
-      challenges. The consumer checkout is mounted at /github/workspace, so pass that (or a
-      subdir). Empty = no source analysis.
-    required: false
-    default: ""
-
-  post-comment:
-    description: "Whether to upsert the PR result comment."
-    required: false
-    default: "true"
-  leaderboard-url:
-    description: "Leaderboard URL shown in the PR comment."
-    required: false
-    default: "https://ctf.owasp.org/leaderboard"
   github-token:
-    description: "Token for the PR result comment. Pass ${{ github.token }} (container actions do not receive it automatically). Empty = skip the comment."
+    description: "Pass ${{ github.token }} for the PR result comment (container actions don't receive GITHUB_TOKEN automatically). Empty = skip the comment."
     required: false
     default: ""
 
@@ -113,20 +70,18 @@ runs:
     TARGET: ${{ inputs.target }}
     APP_URL: ${{ inputs.app-url }}
     RUN: ${{ inputs.run }}
-    NETWORK: ${{ inputs.network }}
-    SCORE_IMAGE: ${{ inputs.score-image }}
-    SCORE_API: ${{ inputs.score-api }}
-    AUDIENCE: ${{ inputs.audience }}
-    EXTRA_ENV: ${{ inputs.extra-env }}
-    SOURCE_MOUNT: ${{ inputs.source-mount }}
-    POST_COMMENT: ${{ inputs.post-comment }}
-    LEADERBOARD_URL: ${{ inputs.leaderboard-url }}
     GH_TOKEN: ${{ inputs.github-token }}
   args:
     - "-c"
     - |
       set -euo pipefail
-      export SCORER_IMAGE="$SCORE_IMAGE" NETWORK
+
+      # Hardcoded config (was per-call inputs; the CTF runs one leaderboard + one scorer).
+      SCORE_API="https://api.ctf.owasp.org"
+      AUDIENCE="ctf-score"
+      LEADERBOARD_URL="https://ctf.owasp.org/leaderboard"
+      export SCORER_IMAGE="ghcr.io/owasp-ctf/score:latest"
+      export NETWORK="ctfnet"
 
       # 1) App setup on the HOST daemon (bind-mounted socket): build + boot + wait.
       if [ -n "${RUN:-}" ]; then
@@ -146,10 +101,6 @@ runs:
 
       # 3) Score in-process — we ARE the scorer image; rubric is embedded. Sidecar to a temp dir.
       outdir="$(mktemp -d)"
-      if [ -n "${EXTRA_ENV:-}" ]; then
-        while IFS= read -r line; do [ -n "$line" ] || continue; export "$line"; done <<< "$EXTRA_ENV"
-      fi
-      [ -n "${SOURCE_MOUNT:-}" ] && export CTF_UPSTREAM_DIR="$SOURCE_MOUNT"
       rc=0
       ( cd "$outdir" && GITHUB_WORKSPACE="$outdir" /usr/local/bin/score --quiet --target "$TARGET" --url "$APP_URL" ) || rc=$?
 
@@ -211,7 +162,7 @@ runs:
       out("recorded", recorded);
 
       // PR result comment (needs github-token; container actions don't get GITHUB_TOKEN for free).
-      if (env.POST_COMMENT === "true" && env.GH_TOKEN && pr.number) {
+      if (env.GH_TOKEN && pr.number) {
         const marker = "<!-- ctf-score-ack -->";
         const sha = (pr.head?.sha ?? "").slice(0, 7);
         const run = `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`;
@@ -249,4 +200,6 @@ runs:
       }
       RECORD_EOF
 
-      SIDECAR="$sidecar" SCORE_OUTCOME="$SCORE_OUTCOME" node /tmp/record.mjs
+      SIDECAR="$sidecar" SCORE_OUTCOME="$SCORE_OUTCOME" \
+        SCORE_API="$SCORE_API" AUDIENCE="$AUDIENCE" LEADERBOARD_URL="$LEADERBOARD_URL" \
+        node /tmp/record.mjs

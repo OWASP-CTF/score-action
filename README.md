@@ -40,17 +40,13 @@ the one app-specific part — **build + boot the PR's app** — via the `run:` i
 | input | required | default | description |
 |-------|----------|---------|-------------|
 | `target` | ✅ | | `juice-shop` \| `dvwa` \| `webgoat` \| `securityshepherd` \| `vampi` \| `vulnerableapp` |
-| `app-url` | ✅ | | Base URL the scorer hits, reachable on `network` (e.g. `http://app`, `http://app:8080/WebGoat`) |
-| `run` | | | App-specific setup (bash) run **before** scoring: build the PR image, create `network`, boot the app + deps, wait for health. Runs inside the action container, drives the host daemon via the mounted socket. `$SCORER_IMAGE` and `$NETWORK` are exported. Trusted consumer YAML — docker build/run PR code only, never execute it directly |
+| `app-url` | ✅ | | Base URL the scorer hits, reachable on `ctfnet` (e.g. `http://app`, `http://app:8080/WebGoat`) |
+| `run` | | | App-specific setup (bash) run **before** scoring: build the PR image, create `ctfnet`, boot the app + deps, wait for health. Runs inside the action container, drives the host daemon via the mounted socket. `$SCORER_IMAGE` and `$NETWORK` are exported. Trusted consumer YAML — docker build/run PR code only, never execute it directly |
 | `github-token` | | | Pass `${{ github.token }}` for the PR result comment. Container actions don't receive `GITHUB_TOKEN` automatically; empty = skip the comment |
-| `network` | | `ctfnet` | Docker network the app runs on; the action container attaches to it to reach the app |
-| `score-image` | | `ghcr.io/owasp-ctf/score:latest` | Image your `run:` references as `$SCORER_IMAGE` (readiness probes etc). The action image itself is fixed in metadata |
-| `score-api` | | `https://api.ctf.owasp.org` | Scoring API base (`POST <score-api>/score`) |
-| `audience` | | `ctf-score` | OIDC id-token audience the API requires |
-| `extra-env` | | | Newline-separated `KEY=VALUE` pairs exported to the in-process scorer (e.g. `WEBWOLF_URL=…`) |
-| `source-mount` | | | Path **inside the action container** exposed as `CTF_UPSTREAM_DIR` for source-analysis. The consumer checkout is mounted at `/github/workspace` |
-| `post-comment` | | `true` | Upsert the PR result comment |
-| `leaderboard-url` | | `https://ctf.owasp.org/leaderboard` | URL shown in the comment |
+
+Everything else is hardcoded (one CTF = one leaderboard + one scorer): network `ctfnet`,
+image `ghcr.io/OWASP-CTF/score:latest`, API `https://api.ctf.owasp.org`, audience `ctf-score`,
+leaderboard `https://ctf.owasp.org/leaderboard`.
 
 ## Outputs
 

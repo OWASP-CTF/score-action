@@ -61,6 +61,7 @@ runs:
       uses: actions/checkout@v5
       with:
         ref: ${{ inputs.ref }}
+        allow-unsafe-pr-checkout: true
 
     - name: Mint the OIDC id-token for the leaderboard
       id: identity

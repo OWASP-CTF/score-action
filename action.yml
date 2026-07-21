@@ -77,6 +77,7 @@ runs:
         password: ${{ inputs.github-token }}
 
     - name: Score + record
+      id: score
       shell: bash
       env:
         SCORE_IMAGE: ${{ inputs.score-image }}
@@ -100,3 +101,51 @@ runs:
           -v "${GITHUB_WORKSPACE}:/github/workspace" \
           -v "${GITHUB_EVENT_PATH}:/github/event.json:ro" \
           "$SCORE_IMAGE"
+
+    # Resolve the ⏳ ack IN PLACE (same <!-- ctf-score-ack --> marker) with the result, so the PR
+    # ends with ONE comment and the ack's own promise ("this comment will update itself") holds.
+    # Without this the ack sits pending forever on consumer repos — the scorer writes the redacted
+    # table to $GITHUB_WORKSPACE/ctf-score.md, but nothing published it.
+    #
+    # Leak-safe: the scorer already redacts per-challenge detail from ctf-score.md; only the
+    # contestant's own total lands here. always() so a failed/crashed run still replaces the ack
+    # with a real outcome instead of a permanent "Scoring…".
+    - name: Upsert the score comment (resolves the ack in place)
+      if: ${{ always() }}
+      uses: actions/github-script@v7
+      env:
+        CTF_TARGET: ${{ inputs.target }}
+        SCORE_OUTCOME: ${{ steps.score.outcome }}
+      with:
+        script: |
+          const fs = require('fs');
+          const marker = '<!-- ctf-score-ack -->';
+          const target = process.env.CTF_TARGET;
+          const names = {
+            'juice-shop': 'Juice Shop', dvwa: 'DVWA', vampi: 'VAmPI',
+            vulnerableapp: 'VulnerableApp', webgoat: 'WebGoat', securityshepherd: 'Security Shepherd',
+          };
+          const app = names[target] || target;
+          const { owner, repo } = context.repo;
+          const issue_number = context.payload.pull_request.number;
+          const sha = (context.payload.pull_request.head.sha || '').slice(0, 7);
+          const run = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+          const path = `${process.env.GITHUB_WORKSPACE}/ctf-score.md`;
+          let table = fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : '';
+          if (process.env.SCORE_OUTCOME !== 'success' || !table.trim()) {
+            table = `## ⚠️ ${app} — scoring did not complete\n\n`
+              + `We couldn't score this commit — your app may have failed to build or boot. `
+              + `Check the [scoring run](${run}) for details, then push a new commit to retry.\n`;
+          }
+          // Fold the app name into the scorer's generic title line.
+          table = table.replace(/^## 🏆 CTF Patch Score$/m, `## 🏆 ${app} — CTF Patch Score`);
+          const body = `${marker}\n${table}\nCommit: \`${sha}\` · [scoring run](${run})`;
+          const comments = await github.paginate(github.rest.issues.listComments, {
+            owner, repo, issue_number,
+          });
+          const existing = comments.find((c) => c.body && c.body.includes(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+          } else {
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+          }

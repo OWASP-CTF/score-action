@@ -33,11 +33,18 @@ inputs:
 runs:
   using: "composite"
   steps:
+    # Marker is TARGET-SCOPED (<!-- ctf-score:<target> -->), and the final step below rewrites
+    # this very comment with the result. Target-scoping matters when one PR scores several apps
+    # (dc34's dogfood matrix): a single shared marker had all matrix jobs racing to overwrite one
+    # comment. It also matches the marker dc34's own per-target comment step already uses, so the
+    # pending comment becomes the result comment instead of a duplicate.
     - name: Upsert the "scoring in progress" comment
       uses: actions/github-script@v7
+      env:
+        CTF_TARGET: ${{ inputs.target }}
       with:
         script: |
-          const marker = '<!-- ctf-score-ack -->';
+          const marker = `<!-- ctf-score:${process.env.CTF_TARGET} -->`;
           const sha = (context.payload.pull_request.head.sha || '').slice(0, 7);
           const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
           const body = `${marker}\n⏳ **Scoring your patch…**\n\n`
@@ -102,8 +109,8 @@ runs:
           -v "${GITHUB_EVENT_PATH}:/github/event.json:ro" \
           "$SCORE_IMAGE"
 
-    # Resolve the ⏳ ack IN PLACE (same <!-- ctf-score-ack --> marker) with the result, so the PR
-    # ends with ONE comment and the ack's own promise ("this comment will update itself") holds.
+    # Resolve the ⏳ pending comment IN PLACE (same target-scoped marker) with the result, so the
+    # PR ends with ONE comment per target and the promise ("it will update itself") holds.
     # Without this the ack sits pending forever on consumer repos — the scorer writes the redacted
     # table to $GITHUB_WORKSPACE/ctf-score.md, but nothing published it.
     #
@@ -119,8 +126,8 @@ runs:
       with:
         script: |
           const fs = require('fs');
-          const marker = '<!-- ctf-score-ack -->';
           const target = process.env.CTF_TARGET;
+          const marker = `<!-- ctf-score:${target} -->`;
           const names = {
             'juice-shop': 'Juice Shop', dvwa: 'DVWA', vampi: 'VAmPI',
             vulnerableapp: 'VulnerableApp', webgoat: 'WebGoat', securityshepherd: 'Security Shepherd',
